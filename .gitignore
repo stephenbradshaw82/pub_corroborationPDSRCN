@@ -1,0 +1,20 @@
+# Ignore everything in this directory
+*
+
+# Except these file
+!.gitignore
+!*.R
+!*.Rmd
+!*.stan
+.Rproj.user
+*.html
+!*.md
+
+!/00_src/
+!/00_src/*
+
+!/01_data
+!/01_data/*
+
+#!/03_outputs
+#!/03_outputs/*
