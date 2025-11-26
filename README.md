@@ -1,4 +1,4 @@
-# Estimating moult timing in lobsters: A Bayesian Approach
+# Imputing Boat-Based Fishing Effort (Phone Diary Survey) from Vessel Activity (Remote Camera Data)
 
 Primary author: Stephen Bradshaw
 
