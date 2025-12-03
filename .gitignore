@@ -16,5 +16,8 @@
 !/01_data
 !/01_data/*
 
+!/02_scripts
+!/02_scripts/*
+
 #!/03_outputs
 #!/03_outputs/*
