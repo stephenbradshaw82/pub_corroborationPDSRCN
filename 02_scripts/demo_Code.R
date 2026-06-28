@@ -16,6 +16,7 @@
 #'     
 #' Version:
 #'  - v1.00 (20251111):
+#'  - v1.10 (20260628): Altered model based on reviewer comments to include a logit transformation of the response variable (PDS) to ensure that the imputed values remain within the bounds of 0 and 1. This change was made to improve the model's performance and accuracy in predicting PDS values.
 #' ------------------------------------------------------------------------- 
 
 #### Package / Library Requirements ####
@@ -31,8 +32,8 @@ list.of.packages <- c("magrittr", "tidyr", "dplyr", "stringr", "purrr"
                       , "readxl"
                       , "data.table"
                       , "openxlsx"
-                      , "rstudioapi"
-                      , "rstan", "shinystan", "StanHeaders")
+                      # , "rstudioapi", "shinystan", "StanHeaders"
+                      , "rstan")
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
@@ -104,7 +105,7 @@ glimpse(df)
 store_imputations <- list()
 
 ##Specify specs for model
-mod_model <- paste0(dirScripts, "/demo_rSTAN.stan") #non-centered version - v4 mod trying to get fit real better
+mod_model <- paste0(dirScripts, "/demo_rSTAN_logit.stan")
 
 ramp_subset <- df$site %>% unique()
 
@@ -133,6 +134,8 @@ if (run_rSTAN){
         year = as.numeric(format(date_ym, "%Y"))
       ) 
     
+    year_levels <- df_site$year %>% unique() %>% sort()
+    
     print("Original data structure (shows 3 rows):")
     print(head(df_site, 3))
     print(paste("Total observations:", nrow(df_site)))
@@ -143,6 +146,10 @@ if (run_rSTAN){
     missing_idx  <- which(is.na(df_site$retrievals_pds))
     n_observed   <- length(observed_idx)
     n_missing    <- length(missing_idx)
+    
+    if (n_observed == 0) {
+      stop(paste0("No observed PDS values available for site: ", ramp))
+    }
     
     ## replace zero or negative SEs with a tiny positive epsilon
     eps <- 1e-6
@@ -177,7 +184,11 @@ if (run_rSTAN){
       
       # Month info
       month = as.integer(df_site$month),
-      N_months = 12
+      N_months = 12,
+      
+      # Year info
+      year_idx = match(df_site$year, year_levels),
+      N_years = length(year_levels)
     )
     
     sdata %>% str()
@@ -190,7 +201,7 @@ if (run_rSTAN){
       object=model
       , data = sdata
       , chains = 4
-      , cores = 4
+      , cores = 1 #4 (warning in positron for URL. No effect on output eitherway)
       , iter = iter
       , warmup = iter/2
       , thin = 4
@@ -207,11 +218,11 @@ if (run_rSTAN){
     
     ## Check structure
     cat("\n=== Posterior Structure ===\n")
-    cat("pds_full dimensions:", dim(fit$pds_full), "\n")
+    cat("pds_est_constrained dimensions:", dim(fit$pds_est_constrained), "\n")
     cat("  (iterations x N_all)\n")
-    cat("pds_latent_miss dimensions:", dim(fit$pds_latent_miss), "\n")
-    cat("  (iterations x N_miss)\n")
-    cat("beta_month dimensions:", dim(fit$beta_month), "\n")
+    cat("pds_full_constrained dimensions:", dim(fit$pds_full_constrained), "\n")
+    cat("  (iterations x N_all)\n")
+    cat("month_effect dimensions:", dim(fit$month_effect), "\n")
     cat("  (iterations x 12 months)\n\n")
     
     ## [THINKING I SHOULD SAVE THESE?] Visualize key parameters
@@ -219,7 +230,7 @@ if (run_rSTAN){
     if ("code" == "checkPosteriors") {
       #--> [PLOT] MONTHLY BETAS FOR SITE ####
       ## Titles
-      month_labels <- paste("Beta -", month.abb)  # "Beta - Jan", "Beta - Feb", ...
+      month_labels <- paste("Month effect -", month.abb)
       
       ## Set layout for 12 plots
       par(mfrow = c(3, 4),
@@ -228,7 +239,7 @@ if (run_rSTAN){
       
       ## Loop over each month
       for (i in 1:12) {
-        hist(fit$beta_month[, i],
+        hist(fit$month_effect[, i],
              main = month_labels[i],
              xlab = "",       # turn off per-plot x label
              ylab = "",       # turn off per-plot y label
@@ -239,7 +250,7 @@ if (run_rSTAN){
       
       ## Add shared axis labels
       mtext("Frequency", side = 2, outer = TRUE, line = 3, cex = 1.2)   # left y-axis
-      mtext("Beta (Ratio of PDS to RCN counts)", side = 1, outer = TRUE, line = 3, cex = 1.2)  # bottom x-axis
+      mtext("Month effect on logit(q)", side = 1, outer = TRUE, line = 3, cex = 1.2)
       
       ## Reset plotting layout
       par(mfrow = c(1, 1))
@@ -251,20 +262,20 @@ if (run_rSTAN){
           oma = c(0, 2, 0, 0))          # no outer margin
       
       ## BETA CHOSEN FOR EACH TIME STEP --> MEAN
-      hist(fit$beta,
-           main = "Mean Indiv. (beta)",
+      hist(fit$alpha_0,
+           main = "Overall mean (alpha_0)",
            xlab = "",
            ylab = ""
            )
-      abline(v = mean(fit$beta), col = "red", lwd = 2)
+      abline(v = mean(fit$alpha_0), col = "red", lwd = 2)
       
-      ## ALPHA CHOSEN FOR EACH TIME STEP --> MEAN
-      hist(fit$alpha,
-           main = "Mean Indiv. (alpha)",
+      ## RESIDUAL VARIATION ON LOG1P SCALE
+      hist(fit$sigma_log,
+           main = "Residual variation (sigma_log)",
            xlab = "",
            ylab = ""
       )
-      abline(v = mean(fit$beta), col = "red", lwd = 2)
+      abline(v = mean(fit$sigma_log), col = "red", lwd = 2)
       
       ## Add shared axis labels
       mtext("Frequency", side = 2, outer = TRUE, line = -0.5, cex = 1.2)   # left y-axis
@@ -280,24 +291,28 @@ if (run_rSTAN){
     cat("\n=== Extracting posterior draws ===\n")
   
     ## Extract posterior draws
-    pds_mean_draws <- fit$pds_expected  # [n_iterations x N]
+    pds_mean_draws <- func_selectPDSDraws(fit = fit, site_name = ramp)
 
-    ## Compute posterior SE for each time point
-    pds_se <- apply(pds_mean_draws, 2, sd)
-    
     ## Compute posterior mean
     pds_posterior_mean <- apply(pds_mean_draws, 2, mean)
     
     ## Or use median (more robust to outliers)
     pds_posterior_median <- apply(pds_mean_draws, 2, median)
     
+    ## Compute posterior SE for each time point
+    pds_se <- apply(pds_mean_draws, 2, sd)
+    
+    ## Compute empirical posterior intervals
+    pds_posterior_ll <- apply(pds_mean_draws, 2, quantile, probs = 0.025)
+    pds_posterior_ul <- apply(pds_mean_draws, 2, quantile, probs = 0.975)
+    
     df_site_out <- df_site
     df_site_out$pds_full_mean <- pds_posterior_mean
     df_site_out$pds_full_se   <- pds_se  # Call it SE (estimation SE)
     
-    ## For plotting: mean ± 1.96 SE (95% interval)
-    df_site_out$pds_full_ll   <- pds_posterior_mean - 1.96 * pds_se
-    df_site_out$pds_full_ul   <- pds_posterior_mean + 1.96 * pds_se
+    ## For plotting: empirical 95% posterior interval
+    df_site_out$pds_full_ll   <- pds_posterior_ll
+    df_site_out$pds_full_ul   <- pds_posterior_ul
     
     ## Imputation flag
     df_site_out <- df_site_out %>%
@@ -320,13 +335,25 @@ if (run_rSTAN){
 }
 #####
 
-
 ################################################################################
 ################################# VISUALISATION ################################
 ################################################################################
 
 #--> Demo output ####
-store_imputations <- readRDS(dir(dirOutputs, full.names = TRUE)[dir(dirOutputs) %>% str_detect(".rds")][1])
+output_files <- dir(dirOutputs, full.names = TRUE)
+output_files <- output_files[basename(output_files) %>% str_detect("^stanOuts_\\d{8}\\.rds$")]
+
+if (length(output_files) == 0) {
+  stop(paste0("No stan output files found in ", dirOutputs))
+}
+
+output_dates <- as.Date(
+  sub(".*_(\\d{8})\\.rds$", "\\1", basename(output_files)),
+  format = "%Y%m%d"
+)
+
+latest_output_file <- output_files[which(output_dates == max(output_dates)) %>% tail(1)]
+store_imputations <- readRDS(latest_output_file)
 
 store_imputations %>% lapply(glimpse)
 
@@ -345,7 +372,7 @@ for (n in 1:length(store_imputations)){
     tibble::rownames_to_column("parameter")
   
   tablist_summStats[[n]] <- sum_df %>%
-    filter(grepl("^(alpha_month|beta_month|sigma)", parameter))  %>%
+    filter(grepl("^(alpha_0|sigma_month|sigma_year|sigma_log|month_effect\\[|year_effect\\[|mean_q|mean_month_effect|mean_year_effect)", parameter))  %>%
     mutate(site = store_imputations %>% names() %>% pluck(n)) %>% 
     select("site", "parameter","n_eff", "Rhat")
   

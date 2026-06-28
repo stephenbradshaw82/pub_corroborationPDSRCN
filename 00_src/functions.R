@@ -19,6 +19,30 @@
 `%!in%` = Negate(`%in%`)
 
 
+#' Selects posterior PDS draws from an extracted Stan fit object
+#' @param fit extracted Stan fit list
+#' @param site_name optional site name for clearer error messages
+#' @returns matrix/array of posterior draws for the full PDS series
+func_selectPDSDraws <- function(fit, site_name = NA_character_) {
+  if ("pds_full_constrained" %in% names(fit)) {
+    return(fit$pds_full_constrained)
+  }
+  
+  if ("pds_est_constrained" %in% names(fit)) {
+    return(fit$pds_est_constrained)
+  }
+  
+  stop(
+    paste0(
+      "Could not find posterior PDS draws",
+      ifelse(is.na(site_name), "", paste0(" for site: ", site_name)),
+      ". Available draws: ", paste(names(fit), collapse = ", ")
+    )
+  )
+}
+#####
+
+
 #' Plot function showing RCN and PDS records
 #' @param df
 #' @param site_name string for plot title (used for labelling)
@@ -195,4 +219,3 @@ func_plot_rcn_pds_quality <- function(
 ###############################################################
 ###############################################################
 ###############################################################
-

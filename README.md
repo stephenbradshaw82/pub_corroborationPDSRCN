@@ -29,9 +29,9 @@ Parent Folder
 │   └── demoData.rds
 ├── 02_scripts
 │   ├── demo_Code.R
-│   └── demo_rSTAN.R
+│   └── demo_rSTAN_logit.R
 └── outputs
     ├── plot_imputed_DEMO BOAT RAMP.png
-    ├── stanOuts_20251111.rds
+    ├── stanOuts_YYYYMMDD.rds
     └── tab_summStats.csv
 ```
